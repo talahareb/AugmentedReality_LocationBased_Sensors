@@ -15,18 +15,16 @@
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <!--
-    <div class="panel">
-      <h1>AR For Sensors</h1>
-      <p>Sensor distances</p>
-
-      <div id="status">
-        <p>Loading...</p>
+    <div class="panel" id="navigatorPanel">
+      <h1>AR Sensor Navigator</h1>
+      <label for="sensorSelect">Choose sensor</label>
+      <select id="sensorSelect"></select>
+      <div class="panel-actions">
+        <button id="followBtn" type="button">Follow Sensor</button>
       </div>
-
-      <button id="checkBtn">Start</button>
+      <div id="status">Choose a sensor to start navigation.</div>
     </div>
-         -->
+
     <a-scene
       vr-mode-ui="enabled: false"
       arjs="sourceType: webcam; videoTexture: true; debugUIEnabled: false;"
@@ -43,78 +41,8 @@
         id="arrow"
         obj-model="obj: #arrow-obj; mtl: #arrow-mtl"
         scale="0.1 0.1 0.1"
-        rotation="-80 0 0"
+        rotation="80 0 0"
         look-at-y
-        
-      ></a-entity>
-
-      <a-entity
-  id="sensor1"
-  gps-new-entity-place="latitude: 45.0645; longitude: 7.6165;"
-  geometry="primitive: box"
-  material="color: red"
-  scale="1.2 1.2 1.2"
-  position="0 -10 0"
-  look-at="[gps-new-camera]"
-></a-entity>
-      <a-entity
-        id="sensor1-debug"
-        gps-new-entity-place="latitude: 45.0645; longitude: 7.6165;"
-        geometry="primitive: cylinder; radius: 0.2; height: 8"
-        material="color: red; opacity: 0.85"
-        position="0 -4 0"
-        look-at="[gps-new-camera]"
-      ></a-entity>
-      <a-entity
-        id="sensor2"
-        gps-new-entity-place="latitude: 45.0646; longitude: 7.6166;"
-        geometry="primitive: box"
-        material="color: blue"
-        scale="0.5 0.5 0.5"
-        position="0 -8 0"
-        look-at="[gps-new-camera]"
-      ></a-entity>
-      <a-entity
-        id="sensor2-debug"
-        gps-new-entity-place="latitude: 45.0646; longitude: 7.6166;"
-        geometry="primitive: cylinder; radius: 0.2; height: 8"
-        material="color: blue; opacity: 0.85"
-        position="0 -4 0"
-        look-at="[gps-new-camera]"
-      ></a-entity>
-      <a-entity
-        id="sensor3"
-        gps-new-entity-place="latitude: 45.0644; longitude: 7.6164;"
-        geometry="primitive: box"
-        material="color: green"
-        scale="0.5 0.5 0.5"
-        position="0 -8 0"
-        look-at="[gps-new-camera]"
-      ></a-entity>
-      <a-entity
-        id="sensor3-debug"
-        gps-new-entity-place="latitude: 45.0644; longitude: 7.6164;"
-        geometry="primitive: cylinder; radius: 0.2; height: 8"
-        material="color: green; opacity: 0.85"
-        position="0 -4 0"
-        look-at="[gps-new-camera]"
-      ></a-entity>
-      <a-entity
-        id="sensor4"
-        gps-new-entity-place="latitude: 45.06455; longitude: 7.61645;"
-        geometry="primitive: box"
-        material="color: yellow"
-        scale="0.5 0.5 0.5"
-        position="0 -8 0"
-        look-at="[gps-new-camera]"
-      ></a-entity>
-      <a-entity
-        id="sensor4-debug"
-        gps-new-entity-place="latitude: 45.06455; longitude: 7.61645;"
-        geometry="primitive: cylinder; radius: 0.2; height: 8"
-        material="color: yellow; opacity: 0.85"
-        position="0 -4 0"
-        look-at="[gps-new-camera]"
       ></a-entity>
     </a-scene>
     <script src="app3.js"></script>

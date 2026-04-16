@@ -1,3 +1,12 @@
+let sensors = [];
+let selectedSensorIndex = null;
+let selectedSensorEntity = null;
+let trackingIntervalId = null;
+let currentUserLat = null;
+let currentUserLon = null;
+let lastDistanceMeters = null;
+let appInitialized = false;
+
 AFRAME.registerComponent("look-at-y", {
   init: function () {
     this.targetPos = new THREE.Vector3();
@@ -6,66 +15,53 @@ AFRAME.registerComponent("look-at-y", {
   },
 
   tick: function () {
-    const target = document.querySelector("#sensor1");
+    if (
+      selectedSensorIndex === null ||
+      currentUserLat === null ||
+      currentUserLon === null
+    ) {
+      return;
+    }
+
     const camera = document.querySelector("[gps-new-camera]");
-    if (!target || !camera) return;
+    if (!camera) return;
 
-    target.object3D.getWorldPosition(this.targetPos);
-    this.el.object3D.getWorldPosition(this.selfPos);
+    const sensor = sensors[selectedSensorIndex];
+    if (!sensor) return;
 
-    const dx = this.targetPos.x - this.selfPos.x;
-    const dz = this.targetPos.z - this.selfPos.z;
+    // Use real geographic bearing from user location to selected sensor.
+    const targetAngle = getBearingRadians(
+      currentUserLat,
+      currentUserLon,
+      sensor.latitude,
+      sensor.longitude,
+    );
 
-    // Bearing in world space
-    const targetAngle = Math.atan2(dx, dz);
-
-    // Camera yaw in world space
     this.cameraEuler.setFromQuaternion(camera.object3D.quaternion, "YXZ");
     const cameraYaw = this.cameraEuler.y;
 
-    // Convert world bearing to camera-local desired yaw
-    // NOTE: Some 3D arrow models face "backwards" relative to A-Frame forward (-Z).
-    // If the tail is pointing at the sensor instead of the tip, keep this offset enabled.
-    // TESTING/CONFIG: set to 0 if your model already points correctly.
-    const modelYawOffset = Math.PI; // 180° flip so arrow tip points to target
-
+    const modelYawOffset = Math.PI;
     const desiredAngle = targetAngle - cameraYaw + modelYawOffset;
 
-    // Smooth + fast interpolation (shortest angle path)
     const currentAngle = this.el.object3D.rotation.y;
-    const smoothing = 0.25; // higher = faster response
+    const smoothing = 0.25;
     const angleDiff = Math.atan2(
       Math.sin(desiredAngle - currentAngle),
       Math.cos(desiredAngle - currentAngle),
     );
 
-    this.el.object3D.rotation.y =
-      currentAngle + angleDiff * smoothing;
+    this.el.object3D.rotation.y = currentAngle + angleDiff * smoothing;
   },
 });
-const sensors = [
-  { name: "Sensor 1", latitude: 45.0645, longitude: 7.6165 },
-  { name: "Sensor 2", latitude: 45.0646, longitude: 7.6166 },
-  { name: "Sensor 3", latitude: 45.0644, longitude: 7.6164 },
-  { name: "Sensor 4", latitude: 45.06455, longitude: 7.61645 },
-];
 
 function formatDistance(distance) {
-  if (distance < 1000) {
-    return `${distance.toFixed(2)} meters`;
-  }
+  if (distance < 1000) return `${distance.toFixed(2)} meters`;
   return `${(distance / 1000).toFixed(2)} km`;
 }
 
-// based on something called "Haversine formula,
-// which is the standard method for computing distances on the Earth.
-//takes 2 points as input, outputs distance in degrees
-//so i formatted them to distance in meters
-// distance = Earth radius × central angle
 function getDistanceMeters(lat1, lon1, lat2, lon2) {
   const earthRadius = 6371000;
   const toRadians = (degrees) => (degrees * Math.PI) / 180;
-
   const deltaLat = toRadians(lat2 - lat1);
   const deltaLon = toRadians(lon2 - lon1);
 
@@ -80,106 +76,263 @@ function getDistanceMeters(lat1, lon1, lat2, lon2) {
   return earthRadius * c;
 }
 
-//deriving my own location, gps
-// this function uses Geolocation API
-// It returns a Promise that resolves with the position data
-// or rejects with an error if geolocation is not supported or if there is an issue retrieving the location.
+function getBearingRadians(lat1, lon1, lat2, lon2) {
+  const toRadians = (degrees) => (degrees * Math.PI) / 180;
+  const phi1 = toRadians(lat1);
+  const phi2 = toRadians(lat2);
+  const lambda1 = toRadians(lon1);
+  const lambda2 = toRadians(lon2);
+  const y = Math.sin(lambda2 - lambda1) * Math.cos(phi2);
+  const x =
+    Math.cos(phi1) * Math.sin(phi2) -
+    Math.sin(phi1) * Math.cos(phi2) * Math.cos(lambda2 - lambda1);
+
+  return Math.atan2(y, x);
+}
+
+function radiansToCompassDegrees(angle) {
+  const degrees = (angle * 180) / Math.PI;
+  return (degrees + 360) % 360;
+}
+
 function getUserLocation() {
   return new Promise((resolve, reject) => {
     if (!navigator.geolocation) {
       reject(new Error("Geolocation is not supported by this browser."));
       return;
     }
-    //this asks the brower for the current gps coordinates
     navigator.geolocation.getCurrentPosition(resolve, reject, {
       enableHighAccuracy: true,
       timeout: 10000,
-      maximumAge: 0, //so it doesnt use cached position
+      maximumAge: 0,
     });
   });
 }
 
-//hl2 hun el program logic
-async function runCheck() {
+function updateStatus(message) {
   const status = document.getElementById("status");
+  if (status) status.innerHTML = message;
+}
 
-  let sensorHtml = `<p><strong>Sensor distances:</strong> Could not get location.</p>`;
+function generateSensorsAroundBase(baseLat, baseLon) {
+  const metersPerDegLat = 111111;
+  const metersPerDegLon = 111111 * Math.cos((baseLat * Math.PI) / 180);
+  const offsetLat = (metersNorth) => metersNorth / metersPerDegLat;
+  const offsetLon = (metersEast) => metersEast / metersPerDegLon;
+
+  return [
+    {
+      name: "North (8m)",
+      latitude: baseLat + offsetLat(8),
+      longitude: baseLon,
+    },
+    {
+      name: "South (8m)",
+      latitude: baseLat + offsetLat(-8),
+      longitude: baseLon,
+    },
+    {
+      name: "East (8m)",
+      latitude: baseLat,
+      longitude: baseLon + offsetLon(8),
+    },
+    {
+      name: "West (8m)",
+      latitude: baseLat,
+      longitude: baseLon + offsetLon(-8),
+    },
+    {
+      name: "North-East (8m,8m)",
+      latitude: baseLat + offsetLat(8),
+      longitude: baseLon + offsetLon(8),
+    },
+    {
+      name: "North-West (8m,8m)",
+      latitude: baseLat + offsetLat(8),
+      longitude: baseLon + offsetLon(-8),
+    },
+    {
+      name: "South-East (8m,8m)",
+      latitude: baseLat + offsetLat(-8),
+      longitude: baseLon + offsetLon(8),
+    },
+    {
+      name: "South-West (8m,8m)",
+      latitude: baseLat + offsetLat(-8),
+      longitude: baseLon + offsetLon(-8),
+    },
+  ];
+}
+
+function buildSensorCoordinatesDebugText() {
+  const lines = sensors.map(
+    (sensor) =>
+      `${sensor.name}: ${sensor.latitude.toFixed(6)}, ${sensor.longitude.toFixed(6)}`,
+  );
+  return lines.join("<br>");
+}
+
+async function initializeSensorsFromLiveLocation() {
+  updateStatus("Initializing sensors from your live location...");
+
+  try {
+    const position = await getUserLocation();
+    const baseLat = position.coords.latitude;
+    const baseLon = position.coords.longitude;
+    currentUserLat = baseLat;
+    currentUserLon = baseLon;
+    sensors = generateSensorsAroundBase(baseLat, baseLon);
+
+    updateStatus(
+      `Sensors initialized around your current position.<br><br><strong>Generated sensors:</strong><br>${buildSensorCoordinatesDebugText()}`,
+    );
+    return true;
+  } catch (error) {
+    updateStatus(
+      `Sensors not initialized yet.<br>Waiting for live geolocation failed: ${error.message}`,
+    );
+    return false;
+  }
+}
+
+function createSensorEntities() {
+  const scene = document.querySelector("a-scene");
+  if (!scene) return;
+
+  document.querySelectorAll('[id^="sensor-"]').forEach((existing) => {
+    existing.parentNode?.removeChild(existing);
+  });
+
+  sensors.forEach((sensor, index) => {
+    const entity = document.createElement("a-entity");
+    entity.setAttribute("id", `sensor-${index}`);
+    entity.setAttribute(
+      "gps-new-entity-place",
+      `latitude: ${sensor.latitude}; longitude: ${sensor.longitude};`,
+    );
+    entity.setAttribute("geometry", "primitive: box");
+    entity.setAttribute("material", "color: #666; opacity: 0.6");
+    entity.setAttribute("scale", "0.35 0.35 0.35");
+    entity.setAttribute("position", "0 -8 0");
+    entity.setAttribute("look-at", "[gps-new-camera]");
+    scene.appendChild(entity);
+  });
+}
+
+function populateSensorDropdown() {
+  const sensorSelect = document.getElementById("sensorSelect");
+  if (!sensorSelect) return;
+
+  sensorSelect.innerHTML = "";
+  sensors.forEach((sensor, index) => {
+    const option = document.createElement("option");
+    option.value = String(index);
+    option.textContent = sensor.name;
+    sensorSelect.appendChild(option);
+  });
+}
+
+function highlightSelectedSensor() {
+  sensors.forEach((_, index) => {
+    const entity = document.getElementById(`sensor-${index}`);
+    if (!entity) return;
+
+    if (index === selectedSensorIndex) {
+      entity.setAttribute("material", "color: #ff3b30; opacity: 1");
+      entity.setAttribute("scale", "0.8 0.8 0.8");
+    } else {
+      entity.setAttribute("material", "color: #666; opacity: 0.45");
+      entity.setAttribute("scale", "0.25 0.25 0.25");
+    }
+  });
+}
+
+function setSelectedSensor(index) {
+  if (Number.isNaN(index) || !sensors[index]) return;
+
+  selectedSensorIndex = index;
+  selectedSensorEntity = document.getElementById(`sensor-${index}`);
+
+  highlightSelectedSensor();
+  updateStatus(
+    `Following <strong>${sensors[index].name}</strong>...`,
+  );
+  startTrackingSelectedSensor();
+}
+
+async function trackSelectedSensorDistance() {
+  if (selectedSensorIndex === null || !sensors[selectedSensorIndex]) return;
 
   try {
     const position = await getUserLocation();
     const userLat = position.coords.latitude;
     const userLon = position.coords.longitude;
+    currentUserLat = userLat;
+    currentUserLon = userLon;
+    const sensor = sensors[selectedSensorIndex];
 
-    // TESTING ONLY (remove later):
-    // Move Sensor 1 to a fake nearby GPS coordinate so it appears close indoors.
-    // This keeps the arrow hardcoded to #sensor1 while making the target visible nearby.
-    const sensor1 = sensors.find((s) => s.name === "Sensor 1");
-    if (sensor1) {
-      const metersNorth = 6; // a few meters away
-      const metersEast = 4; // a few meters away
-      const metersPerDegLat = 111111;
-      const metersPerDegLon = 111111 * Math.cos((userLat * Math.PI) / 180);
+    const distance = getDistanceMeters(
+      userLat,
+      userLon,
+      sensor.latitude,
+      sensor.longitude,
+    );
+    lastDistanceMeters = distance;
+    const bearingRadians = getBearingRadians(
+      userLat,
+      userLon,
+      sensor.latitude,
+      sensor.longitude,
+    );
+    const bearingDegrees = radiansToCompassDegrees(bearingRadians);
+    const bearingText = `${bearingDegrees.toFixed(1)}°`;
 
-      const fakeLat = userLat + metersNorth / metersPerDegLat;
-      const fakeLon = userLon + metersEast / metersPerDegLon;
-
-      sensor1.latitude = fakeLat;
-      sensor1.longitude = fakeLon;
-
-      const sensor1El = document.querySelector("#sensor1");
-      if (sensor1El) {
-        sensor1El.setAttribute(
-          "gps-new-entity-place",
-          `latitude: ${fakeLat}; longitude: ${fakeLon};`,
-        );
-      }
+    if (distance <= 10) {
+      updateStatus(
+        `You have reached <strong>${sensor.name}</strong>.<br>Distance: ${formatDistance(
+          distance,
+        )}<br>Target bearing: ${bearingText}`,
+      );
+      return;
     }
 
-    const sensorResults = sensors
-      .map((sensor) => ({
-        ...sensor,
-        distance: getDistanceMeters(
-          userLat,
-          userLon,
-          sensor.latitude,
-          sensor.longitude,
-        ),
-      }))
-      .sort((a, b) => a.distance - b.distance);
-
-    sensorHtml = `
-      <hr>
-      <p><strong>Your location:</strong></p>
-      <p>Latitude: ${userLat.toFixed(6)}</p>
-      <p>Longitude: ${userLon.toFixed(6)}</p>
-      <hr>
-      <p><strong>Sensor distances:</strong></p>
-      ${sensorResults
-        .map(
-          (sensor) => `
-            <p>
-              <strong>${sensor.name}</strong><br>
-              Latitude: ${sensor.latitude}<br>
-              Longitude: ${sensor.longitude}<br>
-              Distance: ${formatDistance(sensor.distance)}
-            </p>
-          `,
-        )
-        .join("")}
-    `;
+    updateStatus(
+      `Following <strong>${sensor.name}</strong>.<br>Distance: ${formatDistance(
+        distance,
+      )}<br>Target bearing: ${bearingText}`,
+    );
   } catch (error) {
-    sensorHtml = `<hr><p><strong>Location error:</strong> ${error.message}</p>`;
-    console.error("Location error:", error);
+    updateStatus(`Location error: ${error.message}`);
   }
-
-  if (status) status.innerHTML = sensorHtml;
-}
-const btn = document.getElementById("checkBtn");
-if (btn) {
-  btn.addEventListener("click", runCheck);
 }
 
-document.querySelector("a-scene").addEventListener("loaded", () => {
+function startTrackingSelectedSensor() {
+  if (trackingIntervalId) clearInterval(trackingIntervalId);
+  trackSelectedSensorDistance();
+  trackingIntervalId = setInterval(trackSelectedSensorDistance, 1500);
+}
+
+function bindUiEvents() {
+  const followBtn = document.getElementById("followBtn");
+  const sensorSelect = document.getElementById("sensorSelect");
+  if (!followBtn || !sensorSelect) return;
+
+  followBtn.addEventListener("click", () => {
+    const selectedIndex = Number(sensorSelect.value);
+    setSelectedSensor(selectedIndex);
+  });
+
+  // Live switch target directly from dropdown, no reset button needed.
+  sensorSelect.addEventListener("change", () => {
+    const selectedIndex = Number(sensorSelect.value);
+    setSelectedSensor(selectedIndex);
+  });
+}
+
+async function initApp() {
+  if (appInitialized) return;
+  appInitialized = true;
+
   const camera = document.querySelector("[gps-new-camera]");
   const arrow = document.getElementById("arrow");
 
@@ -188,5 +341,24 @@ document.querySelector("a-scene").addEventListener("loaded", () => {
     arrow.setAttribute("position", "0 -1 -2");
   }
 
-  runCheck();
-});
+  const sensorsReady = await initializeSensorsFromLiveLocation();
+  if (!sensorsReady) return;
+
+  createSensorEntities();
+  populateSensorDropdown();
+  bindUiEvents();
+  updateStatus(
+    `Loaded ${sensors.length} sensors around your live location.<br>Choose one and tap Follow Sensor.<br><br><strong>Generated sensors:</strong><br>${buildSensorCoordinatesDebugText()}`,
+  );
+}
+
+const scene = document.querySelector("a-scene");
+if (scene) {
+  if (scene.hasLoaded) {
+    void initApp();
+  } else {
+    scene.addEventListener("loaded", () => {
+      void initApp();
+    }, { once: true });
+  }
+}
