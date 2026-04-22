@@ -6,3 +6,6 @@ key.pem
 # JS files you don't want
 ar_for_sensors/app.js
 ar_for_sensors/app2.js
+node_modules/
+.DS_Store
+Thumbs.db

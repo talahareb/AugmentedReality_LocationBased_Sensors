@@ -1,0 +1,12 @@
+{
+  "name": "ar-sensors-poc",
+  "version": "1.0.0",
+  "description": "Location-based AR proof of concept for visualizing sensors using A-Frame and AR.js.",
+  "scripts": {
+    "start": "http-server . -p 8000",
+    "start:https": "http-server . -S -C cert.pem -K key.pem -p 8000"
+  },
+  "dependencies": {
+    "http-server": "^14.1.1"
+  }
+}
