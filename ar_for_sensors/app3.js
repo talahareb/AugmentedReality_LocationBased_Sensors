@@ -1,11 +1,42 @@
 let sensors = [];
 let selectedSensorIndex = null;
-let selectedSensorEntity = null;
 let trackingIntervalId = null;
 let currentUserLat = null;
 let currentUserLon = null;
 let lastDistanceMeters = null;
 let appInitialized = false;
+let stabilizedUserLat = null;
+let stabilizedUserLon = null;
+const CONFIG = {
+  // Main distance from base point to each generated sensor.
+  sensorOffsetMeters: 12,
+  // Smoothing for live user location updates (0-1).
+  userPositionSmoothingAlpha: 0.25,
+  // Ignore GPS movement smaller than this threshold.
+  userPositionMinUpdateMeters: 1.5,
+  // Sensor box style.
+  sensorColor: "#ff4fa3",
+  sensorOpacity: 0.9,
+  sensorScaleDefault: "0.45 0.45 0.45",
+  sensorScaleSelected: "0.75 0.75 0.75",
+  // Arrow heading calibration: 0 (normal), Math.PI (flip 180).
+  arrowYawOffsetRadians: 0,
+  // Distance refresh rate.
+  trackingIntervalMs: 1500,
+};
+
+const STATIC_SENSORS = [
+  {
+    name: "Static Sensor 1",
+    latitude: 45.063226,
+    longitude: 7.658016
+  },
+  {
+    name: "Static Sensor 2",
+    latitude: 45.063849,
+    longitude: 7.658587
+  },
+];
 
 AFRAME.registerComponent("look-at-y", {
   init: function () {
@@ -40,8 +71,7 @@ AFRAME.registerComponent("look-at-y", {
     this.cameraEuler.setFromQuaternion(camera.object3D.quaternion, "YXZ");
     const cameraYaw = this.cameraEuler.y;
 
-    const modelYawOffset = Math.PI;
-    const desiredAngle = targetAngle - cameraYaw + modelYawOffset;
+    const desiredAngle = targetAngle - cameraYaw + CONFIG.arrowYawOffsetRadians;
 
     const currentAngle = this.el.object3D.rotation.y;
     const smoothing = 0.25;
@@ -114,6 +144,29 @@ function updateStatus(message) {
   if (status) status.innerHTML = message;
 }
 
+function updateStabilizedUserLocation(lat, lon) {
+  if (stabilizedUserLat === null || stabilizedUserLon === null) {
+    stabilizedUserLat = lat;
+    stabilizedUserLon = lon;
+    return;
+  }
+
+  const deltaFromStabilized = getDistanceMeters(
+    stabilizedUserLat,
+    stabilizedUserLon,
+    lat,
+    lon,
+  );
+
+  // Ignore tiny GPS wobble to keep AR targets visually steady.
+  if (deltaFromStabilized < CONFIG.userPositionMinUpdateMeters) return;
+
+  stabilizedUserLat +=
+    (lat - stabilizedUserLat) * CONFIG.userPositionSmoothingAlpha;
+  stabilizedUserLon +=
+    (lon - stabilizedUserLon) * CONFIG.userPositionSmoothingAlpha;
+}
+
 function generateSensorsAroundBase(baseLat, baseLon) {
   const metersPerDegLat = 111111;
   const metersPerDegLon = 111111 * Math.cos((baseLat * Math.PI) / 180);
@@ -122,44 +175,44 @@ function generateSensorsAroundBase(baseLat, baseLon) {
 
   return [
     {
-      name: "North (8m)",
-      latitude: baseLat + offsetLat(8),
+      name: `North (${CONFIG.sensorOffsetMeters}m)`,
+      latitude: baseLat + offsetLat(CONFIG.sensorOffsetMeters),
       longitude: baseLon,
     },
     {
-      name: "South (8m)",
-      latitude: baseLat + offsetLat(-8),
+      name: `South (${CONFIG.sensorOffsetMeters}m)`,
+      latitude: baseLat + offsetLat(-CONFIG.sensorOffsetMeters),
       longitude: baseLon,
     },
     {
-      name: "East (8m)",
+      name: `East (${CONFIG.sensorOffsetMeters}m)`,
       latitude: baseLat,
-      longitude: baseLon + offsetLon(8),
+      longitude: baseLon + offsetLon(-CONFIG.sensorOffsetMeters),
     },
     {
-      name: "West (8m)",
+      name: `West (${CONFIG.sensorOffsetMeters}m)`,
       latitude: baseLat,
-      longitude: baseLon + offsetLon(-8),
+      longitude: baseLon + offsetLon(CONFIG.sensorOffsetMeters),
     },
     {
-      name: "North-East (8m,8m)",
-      latitude: baseLat + offsetLat(8),
-      longitude: baseLon + offsetLon(8),
+      name: `North-East (${CONFIG.sensorOffsetMeters}m,${CONFIG.sensorOffsetMeters}m)`,
+      latitude: baseLat + offsetLat(CONFIG.sensorOffsetMeters),
+      longitude: baseLon + offsetLon(-CONFIG.sensorOffsetMeters),
     },
     {
-      name: "North-West (8m,8m)",
-      latitude: baseLat + offsetLat(8),
-      longitude: baseLon + offsetLon(-8),
+      name: `North-West (${CONFIG.sensorOffsetMeters}m,${CONFIG.sensorOffsetMeters}m)`,
+      latitude: baseLat + offsetLat(CONFIG.sensorOffsetMeters),
+      longitude: baseLon + offsetLon(CONFIG.sensorOffsetMeters),
     },
     {
-      name: "South-East (8m,8m)",
-      latitude: baseLat + offsetLat(-8),
-      longitude: baseLon + offsetLon(8),
+      name: `South-East (${CONFIG.sensorOffsetMeters}m,${CONFIG.sensorOffsetMeters}m)`,
+      latitude: baseLat + offsetLat(-CONFIG.sensorOffsetMeters),
+      longitude: baseLon + offsetLon(-CONFIG.sensorOffsetMeters),
     },
     {
-      name: "South-West (8m,8m)",
-      latitude: baseLat + offsetLat(-8),
-      longitude: baseLon + offsetLon(-8),
+      name: `South-West (${CONFIG.sensorOffsetMeters}m,${CONFIG.sensorOffsetMeters}m)`,
+      latitude: baseLat + offsetLat(-CONFIG.sensorOffsetMeters),
+      longitude: baseLon + offsetLon(CONFIG.sensorOffsetMeters),
     },
   ];
 }
@@ -181,10 +234,13 @@ async function initializeSensorsFromLiveLocation() {
     const baseLon = position.coords.longitude;
     currentUserLat = baseLat;
     currentUserLon = baseLon;
-    sensors = generateSensorsAroundBase(baseLat, baseLon);
+    stabilizedUserLat = baseLat;
+    stabilizedUserLon = baseLon;
+    const dynamicSensors = generateSensorsAroundBase(baseLat, baseLon);
+    sensors = [...dynamicSensors, ...STATIC_SENSORS];
 
     updateStatus(
-      `Sensors initialized around your current position.<br><br><strong>Generated sensors:</strong><br>${buildSensorCoordinatesDebugText()}`,
+      `Sensors initialized around your current position.<br><br><strong>Available sensors:</strong><br>${buildSensorCoordinatesDebugText()}`,
     );
     return true;
   } catch (error) {
@@ -206,14 +262,19 @@ function createSensorEntities() {
   sensors.forEach((sensor, index) => {
     const entity = document.createElement("a-entity");
     entity.setAttribute("id", `sensor-${index}`);
+    entity.setAttribute("class", "sensor-box");
+    entity.dataset.sensorIndex = String(index);
     entity.setAttribute(
       "gps-new-entity-place",
       `latitude: ${sensor.latitude}; longitude: ${sensor.longitude};`,
     );
     entity.setAttribute("geometry", "primitive: box");
-    entity.setAttribute("material", "color: #666; opacity: 0.6");
-    entity.setAttribute("scale", "0.35 0.35 0.35");
-    entity.setAttribute("position", "0 -8 0");
+    entity.setAttribute(
+      "material",
+      `color: ${CONFIG.sensorColor}; opacity: ${CONFIG.sensorOpacity}`,
+    );
+    entity.setAttribute("scale", CONFIG.sensorScaleDefault);
+    entity.setAttribute("position", "0 0 0");
     entity.setAttribute("look-at", "[gps-new-camera]");
     scene.appendChild(entity);
   });
@@ -230,19 +291,28 @@ function populateSensorDropdown() {
     option.textContent = sensor.name;
     sensorSelect.appendChild(option);
   });
+
+  // Ensure a deterministic initial target so arrow yaw updates immediately.
+  if (sensors.length > 0) {
+    sensorSelect.value = "0";
+  }
 }
 
 function highlightSelectedSensor() {
-  sensors.forEach((_, index) => {
-    const entity = document.getElementById(`sensor-${index}`);
-    if (!entity) return;
+  const sensorEntities = document.querySelectorAll(".sensor-box");
+  sensorEntities.forEach((entity) => {
+    const entityIndex = Number(entity.dataset.sensorIndex);
+    if (Number.isNaN(entityIndex)) return;
 
-    if (index === selectedSensorIndex) {
-      entity.setAttribute("material", "color: #ff3b30; opacity: 1");
-      entity.setAttribute("scale", "0.8 0.8 0.8");
+    entity.setAttribute(
+      "material",
+      `color: ${CONFIG.sensorColor}; opacity: ${CONFIG.sensorOpacity}`,
+    );
+
+    if (entityIndex === selectedSensorIndex) {
+      entity.setAttribute("scale", CONFIG.sensorScaleSelected);
     } else {
-      entity.setAttribute("material", "color: #666; opacity: 0.45");
-      entity.setAttribute("scale", "0.25 0.25 0.25");
+      entity.setAttribute("scale", CONFIG.sensorScaleDefault);
     }
   });
 }
@@ -251,7 +321,10 @@ function setSelectedSensor(index) {
   if (Number.isNaN(index) || !sensors[index]) return;
 
   selectedSensorIndex = index;
-  selectedSensorEntity = document.getElementById(`sensor-${index}`);
+  const sensorSelect = document.getElementById("sensorSelect");
+  if (sensorSelect) {
+    sensorSelect.value = String(index);
+  }
 
   highlightSelectedSensor();
   updateStatus(
@@ -265,22 +338,25 @@ async function trackSelectedSensorDistance() {
 
   try {
     const position = await getUserLocation();
-    const userLat = position.coords.latitude;
-    const userLon = position.coords.longitude;
-    currentUserLat = userLat;
-    currentUserLon = userLon;
+    const rawUserLat = position.coords.latitude;
+    const rawUserLon = position.coords.longitude;
+    updateStabilizedUserLocation(rawUserLat, rawUserLon);
+    const trackedUserLat = stabilizedUserLat ?? rawUserLat;
+    const trackedUserLon = stabilizedUserLon ?? rawUserLon;
+    currentUserLat = trackedUserLat;
+    currentUserLon = trackedUserLon;
     const sensor = sensors[selectedSensorIndex];
 
     const distance = getDistanceMeters(
-      userLat,
-      userLon,
+      trackedUserLat,
+      trackedUserLon,
       sensor.latitude,
       sensor.longitude,
     );
     lastDistanceMeters = distance;
     const bearingRadians = getBearingRadians(
-      userLat,
-      userLon,
+      trackedUserLat,
+      trackedUserLon,
       sensor.latitude,
       sensor.longitude,
     );
@@ -309,7 +385,10 @@ async function trackSelectedSensorDistance() {
 function startTrackingSelectedSensor() {
   if (trackingIntervalId) clearInterval(trackingIntervalId);
   trackSelectedSensorDistance();
-  trackingIntervalId = setInterval(trackSelectedSensorDistance, 1500);
+  trackingIntervalId = setInterval(
+    trackSelectedSensorDistance,
+    CONFIG.trackingIntervalMs,
+  );
 }
 
 function bindUiEvents() {
@@ -347,8 +426,11 @@ async function initApp() {
   createSensorEntities();
   populateSensorDropdown();
   bindUiEvents();
+  if (sensors.length > 0) {
+    setSelectedSensor(0);
+  }
   updateStatus(
-    `Loaded ${sensors.length} sensors around your live location.<br>Choose one and tap Follow Sensor.<br><br><strong>Generated sensors:</strong><br>${buildSensorCoordinatesDebugText()}`,
+    `Loaded ${sensors.length} sensors (dynamic + static).<br>Auto-following the first sensor. You can switch from the dropdown anytime.<br><br><strong>Available sensors:</strong><br>${buildSensorCoordinatesDebugText()}`,
   );
 }
 
