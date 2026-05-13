@@ -8,8 +8,6 @@ let appInitialized = false;
 let stabilizedUserLat = null;
 let stabilizedUserLon = null;
 const CONFIG = {
-  // Main distance from base point to each generated sensor.
-  sensorOffsetMeters: 12,
   // Smoothing for live user location updates (0-1).
   userPositionSmoothingAlpha: 0.25,
   // Ignore GPS movement smaller than this threshold.
@@ -17,26 +15,14 @@ const CONFIG = {
   // Sensor box style.
   sensorColor: "#ff4fa3",
   sensorOpacity: 0.9,
-  sensorScaleDefault: "0.45 0.45 0.45",
-  sensorScaleSelected: "0.75 0.75 0.75",
+  sensorScaleDefault: "0.6 0.6 0.6",
+  sensorScaleSelectedMedium: "0.95 0.95 0.95",
+  sensorScaleSelectedNear: "1.25 1.25 1.25",
   // Arrow heading calibration: 0 (normal), Math.PI (flip 180).
   arrowYawOffsetRadians: 0,
   // Distance refresh rate.
   trackingIntervalMs: 1500,
 };
-
-const STATIC_SENSORS = [
-  {
-    name: "Static Sensor 1",
-    latitude: 45.063226,
-    longitude: 7.658016
-  },
-  {
-    name: "Static Sensor 2",
-    latitude: 45.063849,
-    longitude: 7.658587
-  },
-];
 
 AFRAME.registerComponent("look-at-y", {
   init: function () {
@@ -60,7 +46,7 @@ AFRAME.registerComponent("look-at-y", {
     const sensor = sensors[selectedSensorIndex];
     if (!sensor) return;
 
-    // Use real geographic bearing from user location to selected sensor.
+    // Arrow bearing: compute real-world bearing from current user GPS to target sensor GPS.
     const targetAngle = getBearingRadians(
       currentUserLat,
       currentUserLon,
@@ -71,6 +57,7 @@ AFRAME.registerComponent("look-at-y", {
     this.cameraEuler.setFromQuaternion(camera.object3D.quaternion, "YXZ");
     const cameraYaw = this.cameraEuler.y;
 
+    // Convert world bearing into arrow-local yaw by subtracting the camera yaw.
     const desiredAngle = targetAngle - cameraYaw + CONFIG.arrowYawOffsetRadians;
 
     const currentAngle = this.el.object3D.rotation.y;
@@ -90,6 +77,7 @@ function formatDistance(distance) {
 }
 
 function getDistanceMeters(lat1, lon1, lat2, lon2) {
+  // Haversine distance in meters between two latitude/longitude points.
   const earthRadius = 6371000;
   const toRadians = (degrees) => (degrees * Math.PI) / 180;
   const deltaLat = toRadians(lat2 - lat1);
@@ -107,6 +95,7 @@ function getDistanceMeters(lat1, lon1, lat2, lon2) {
 }
 
 function getBearingRadians(lat1, lon1, lat2, lon2) {
+  // Initial geodesic bearing from point A (user) to point B (sensor), in radians.
   const toRadians = (degrees) => (degrees * Math.PI) / 180;
   const phi1 = toRadians(lat1);
   const phi2 = toRadians(lat2);
@@ -126,6 +115,7 @@ function radiansToCompassDegrees(angle) {
 }
 
 function getUserLocation() {
+  // Live GPS is used for navigation only: distance text + arrow direction updates.
   return new Promise((resolve, reject) => {
     if (!navigator.geolocation) {
       reject(new Error("Geolocation is not supported by this browser."));
@@ -158,63 +148,14 @@ function updateStabilizedUserLocation(lat, lon) {
     lon,
   );
 
-  // Ignore tiny GPS wobble to keep AR targets visually steady.
+  // GPS smoothing reduces jitter from noisy readings so UI updates stay stable.
+  // Small movement is ignored; larger movement is blended with the previous stabilized point.
   if (deltaFromStabilized < CONFIG.userPositionMinUpdateMeters) return;
 
   stabilizedUserLat +=
     (lat - stabilizedUserLat) * CONFIG.userPositionSmoothingAlpha;
   stabilizedUserLon +=
     (lon - stabilizedUserLon) * CONFIG.userPositionSmoothingAlpha;
-}
-
-function generateSensorsAroundBase(baseLat, baseLon) {
-  const metersPerDegLat = 111111;
-  const metersPerDegLon = 111111 * Math.cos((baseLat * Math.PI) / 180);
-  const offsetLat = (metersNorth) => metersNorth / metersPerDegLat;
-  const offsetLon = (metersEast) => metersEast / metersPerDegLon;
-
-  return [
-    {
-      name: `North (${CONFIG.sensorOffsetMeters}m)`,
-      latitude: baseLat + offsetLat(CONFIG.sensorOffsetMeters),
-      longitude: baseLon,
-    },
-    {
-      name: `South (${CONFIG.sensorOffsetMeters}m)`,
-      latitude: baseLat + offsetLat(-CONFIG.sensorOffsetMeters),
-      longitude: baseLon,
-    },
-    {
-      name: `East (${CONFIG.sensorOffsetMeters}m)`,
-      latitude: baseLat,
-      longitude: baseLon + offsetLon(-CONFIG.sensorOffsetMeters),
-    },
-    {
-      name: `West (${CONFIG.sensorOffsetMeters}m)`,
-      latitude: baseLat,
-      longitude: baseLon + offsetLon(CONFIG.sensorOffsetMeters),
-    },
-    {
-      name: `North-East (${CONFIG.sensorOffsetMeters}m,${CONFIG.sensorOffsetMeters}m)`,
-      latitude: baseLat + offsetLat(CONFIG.sensorOffsetMeters),
-      longitude: baseLon + offsetLon(-CONFIG.sensorOffsetMeters),
-    },
-    {
-      name: `North-West (${CONFIG.sensorOffsetMeters}m,${CONFIG.sensorOffsetMeters}m)`,
-      latitude: baseLat + offsetLat(CONFIG.sensorOffsetMeters),
-      longitude: baseLon + offsetLon(CONFIG.sensorOffsetMeters),
-    },
-    {
-      name: `South-East (${CONFIG.sensorOffsetMeters}m,${CONFIG.sensorOffsetMeters}m)`,
-      latitude: baseLat + offsetLat(-CONFIG.sensorOffsetMeters),
-      longitude: baseLon + offsetLon(-CONFIG.sensorOffsetMeters),
-    },
-    {
-      name: `South-West (${CONFIG.sensorOffsetMeters}m,${CONFIG.sensorOffsetMeters}m)`,
-      latitude: baseLat + offsetLat(-CONFIG.sensorOffsetMeters),
-      longitude: baseLon + offsetLon(CONFIG.sensorOffsetMeters),
-    },
-  ];
 }
 
 function buildSensorCoordinatesDebugText() {
@@ -225,27 +166,44 @@ function buildSensorCoordinatesDebugText() {
   return lines.join("<br>");
 }
 
-async function initializeSensorsFromLiveLocation() {
-  updateStatus("Initializing sensors from your live location...");
-
+async function loadSensorsFromJson() {
+  // Sensors are loaded from external JSON so locations can be edited without touching JS.
   try {
-    const position = await getUserLocation();
-    const baseLat = position.coords.latitude;
-    const baseLon = position.coords.longitude;
-    currentUserLat = baseLat;
-    currentUserLon = baseLon;
-    stabilizedUserLat = baseLat;
-    stabilizedUserLon = baseLon;
-    const dynamicSensors = generateSensorsAroundBase(baseLat, baseLon);
-    sensors = [...dynamicSensors, ...STATIC_SENSORS];
+    const response = await fetch("./sensors.json", { cache: "no-store" });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
 
+    const loadedSensors = await response.json();
+    // Basic shape validation for predictable rendering/tracking behavior.
+    if (!Array.isArray(loadedSensors)) {
+      throw new Error("Invalid sensors format: expected an array.");
+    }
+
+    const hasInvalidSensor = loadedSensors.some((sensor) => {
+      return (
+        !sensor ||
+        typeof sensor.name !== "string" ||
+        typeof sensor.latitude !== "number" ||
+        typeof sensor.longitude !== "number"
+      );
+    });
+
+    if (hasInvalidSensor) {
+      throw new Error(
+        "Invalid sensor entry: each item needs name, latitude, longitude.",
+      );
+    }
+
+    sensors = [...loadedSensors];
     updateStatus(
-      `Sensors initialized around your current position.<br><br><strong>Available sensors:</strong><br>${buildSensorCoordinatesDebugText()}`,
+      `Static sensors loaded.<br><br><strong>Available sensors:</strong><br>${buildSensorCoordinatesDebugText()}`,
     );
     return true;
   } catch (error) {
+    sensors = [];
     updateStatus(
-      `Sensors not initialized yet.<br>Waiting for live geolocation failed: ${error.message}`,
+      `Failed to load sensors from sensors.json.<br>Error: ${error.message}`,
     );
     return false;
   }
@@ -255,10 +213,12 @@ function createSensorEntities() {
   const scene = document.querySelector("a-scene");
   if (!scene) return;
 
-  document.querySelectorAll('[id^="sensor-"]').forEach((existing) => {
+  // Remove both JS-created sensor entities and any legacy hardcoded sensor1 entity.
+  document.querySelectorAll('[id^="sensor-"], #sensor1').forEach((existing) => {
     existing.parentNode?.removeChild(existing);
   });
 
+  // One AR entity per sensor; gps-new-entity-place anchors each box to real coordinates.
   sensors.forEach((sensor, index) => {
     const entity = document.createElement("a-entity");
     entity.setAttribute("id", `sensor-${index}`);
@@ -298,7 +258,23 @@ function populateSensorDropdown() {
   }
 }
 
+function getSensorScaleByDistance(distanceMeters) {
+  // Distance-based scaling for selected sensor:
+  // near => largest, medium => medium size, far => default size.
+  if (distanceMeters <= 25) return CONFIG.sensorScaleSelectedNear;
+  if (distanceMeters <= 100) return CONFIG.sensorScaleSelectedMedium;
+  return CONFIG.sensorScaleDefault;
+}
+
+function updateSelectedSensorScaleByDistance(distanceMeters) {
+  if (selectedSensorIndex === null) return;
+  const selectedEntity = document.getElementById(`sensor-${selectedSensorIndex}`);
+  if (!selectedEntity) return;
+  selectedEntity.setAttribute("scale", getSensorScaleByDistance(distanceMeters));
+}
+
 function highlightSelectedSensor() {
+  // Selected sensor gets emphasized scale; all others remain at default scale.
   const sensorEntities = document.querySelectorAll(".sensor-box");
   sensorEntities.forEach((entity) => {
     const entityIndex = Number(entity.dataset.sensorIndex);
@@ -310,10 +286,15 @@ function highlightSelectedSensor() {
     );
 
     if (entityIndex === selectedSensorIndex) {
-      entity.setAttribute("scale", CONFIG.sensorScaleSelected);
-    } else {
-      entity.setAttribute("scale", CONFIG.sensorScaleDefault);
+      const selectedScale =
+        lastDistanceMeters === null
+          ? CONFIG.sensorScaleSelectedMedium
+          : getSensorScaleByDistance(lastDistanceMeters);
+      entity.setAttribute("scale", selectedScale);
+      return;
     }
+
+    entity.setAttribute("scale", CONFIG.sensorScaleDefault);
   });
 }
 
@@ -326,6 +307,7 @@ function setSelectedSensor(index) {
     sensorSelect.value = String(index);
   }
 
+  lastDistanceMeters = null;
   highlightSelectedSensor();
   updateStatus(
     `Following <strong>${sensors[index].name}</strong>...`,
@@ -347,6 +329,7 @@ async function trackSelectedSensorDistance() {
     currentUserLon = trackedUserLon;
     const sensor = sensors[selectedSensorIndex];
 
+    // Recompute live user-to-sensor distance each cycle using stabilized GPS coordinates.
     const distance = getDistanceMeters(
       trackedUserLat,
       trackedUserLon,
@@ -354,6 +337,8 @@ async function trackSelectedSensorDistance() {
       sensor.longitude,
     );
     lastDistanceMeters = distance;
+    // Apply distance-based visual scaling only to the currently selected sensor.
+    updateSelectedSensorScaleByDistance(distance);
     const bearingRadians = getBearingRadians(
       trackedUserLat,
       trackedUserLon,
@@ -420,7 +405,7 @@ async function initApp() {
     arrow.setAttribute("position", "0 -1 -2");
   }
 
-  const sensorsReady = await initializeSensorsFromLiveLocation();
+  const sensorsReady = await loadSensorsFromJson();
   if (!sensorsReady) return;
 
   createSensorEntities();
@@ -430,7 +415,7 @@ async function initApp() {
     setSelectedSensor(0);
   }
   updateStatus(
-    `Loaded ${sensors.length} sensors (dynamic + static).<br>Auto-following the first sensor. You can switch from the dropdown anytime.<br><br><strong>Available sensors:</strong><br>${buildSensorCoordinatesDebugText()}`,
+    `Loaded ${sensors.length} static sensors.<br>Auto-following the first sensor. You can switch from the dropdown anytime.<br><br><strong>Available sensors:</strong><br>${buildSensorCoordinatesDebugText()}`,
   );
 }
 
